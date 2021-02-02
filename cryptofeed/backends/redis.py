@@ -22,22 +22,31 @@ class RedisCallback:
         self.redis = None
         self.key = key if key else self.default_key
         self.numeric_type = numeric_type
-        self.conn_str = socket if socket else f'redis://{host}:{port}'
+        self.conn_str = socket if socket else f'redis://{host}:{port}/2'
 
 
 class RedisZSetCallback(RedisCallback):
-    async def write(self, feed: str, symbol: str, timestamp: float, receipt_timestamp: float, data: dict):
-        data = json.dumps(data)
+    async def write(self, feed: str, pair: str, timestamp: float, receipt_timestamp: float, data: dict):
+        bids = data['bid']
+        asks = data['ask']
+
+        bids = json.dumps(bids)
+        asks = json.dumps(asks)
+        
         if self.redis is None:
             self.redis = await aioredis.create_redis_pool(self.conn_str)
-        await self.redis.zadd(f"{self.key}-{feed}-{symbol}", timestamp, data, exist=self.redis.ZSET_IF_NOT_EXIST)
+            await self.redis.flushdb()
+        
+        await self.redis.hset("kraken", 'bids', bids)
+        await self.redis.hset("kraken", 'asks', asks)
+        await self.redis.set('last_update', timestamp)
 
 
 class RedisStreamCallback(RedisCallback):
-    async def write(self, feed: str, symbol: str, timestamp: float, receipt_timestamp: float, data: dict):
+    async def write(self, feed: str, pair: str, timestamp: float, receipt_timestamp: float, data: dict):
         if self.redis is None:
             self.redis = await aioredis.create_redis_pool(self.conn_str)
-        await self.redis.xadd(f"{self.key}-{feed}-{symbol}", data)
+        #await self.redis.xadd(f"{self.key}-{feed}-{pair}", data)
 
 
 class TradeRedis(RedisZSetCallback, BackendTradeCallback):
@@ -67,17 +76,17 @@ class BookDeltaRedis(RedisZSetCallback, BackendBookDeltaCallback):
 class BookStream(RedisStreamCallback, BackendBookCallback):
     default_key = 'book'
 
-    async def write(self, feed: str, symbol: str, timestamp: float, receipt_timestamp: float, data: dict):
+    async def write(self, feed: str, pair: str, timestamp: float, receipt_timestamp: float, data: dict):
         data = {'data': json.dumps(data)}
-        await super().write(feed, symbol, timestamp, receipt_timestamp, data)
+        await super().write(feed, pair, timestamp, receipt_timestamp, data)
 
 
 class BookDeltaStream(RedisStreamCallback, BackendBookDeltaCallback):
     default_key = 'book'
 
-    async def write(self, feed: str, symbol: str, timestamp: str, receipt_timestamp: float, data: dict):
+    async def write(self, feed: str, pair: str, timestamp: str, receipt_timestamp: float, data: dict):
         data = {'data': json.dumps(data)}
-        await super().write(feed, symbol, timestamp, receipt_timestamp, data)
+        await super().write(feed, pair, timestamp, receipt_timestamp, data)
 
 
 class TickerRedis(RedisZSetCallback, BackendTickerCallback):
